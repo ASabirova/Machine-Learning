@@ -2,7 +2,8 @@
 title: 'Data Science for Business Project: Bank Marketing'
 author: "Sabirova Aidai"
 date: '2017-02-15'
-output: html_document
+output: 
+  prettydoc::html_pretty
 ---
 
 ```{r setup, include=FALSE}
