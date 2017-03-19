@@ -1,0 +1,303 @@
+---
+title: 'Data Science for Business Project: Bank Marketing'
+author: "Sabirova Aidai"
+date: '2017-02-15'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Data Cleaning and Exploratory Analysis 
+### The dataset 
+The dataset was downloaded from UCI Machine Learning Repository.
+The data is related with direct marketing campaigns (phone calls) of a Portuguese banking institution. The classification goal is to predict if the client will subscribe a term deposit (variable y). 
+The original labeled data set has N=45211 observations with 17 variables, and later splitted into training and test sets.
+
+##### Input variables:
+
+###### bank client data:
+
+1 - age (numeric)
+
+2 - job : type of job (categorical: 'admin.','blue-collar','entrepreneur','housemaid','management','retired','self-employed','services','student','technician','unemployed','unknown')
+
+3 - marital : marital status (categorical: 'divorced','married','single','unknown'; note: 'divorced' means divorced or widowed)
+
+4 - education (categorical: 'basic.4y','basic.6y','basic.9y','high.school','illiterate','professional.course','university.degree','unknown')
+
+5 - default: has credit in default? (categorical: 'no','yes','unknown')
+
+6 - housing: has housing loan? (categorical: 'no','yes','unknown')
+
+7 - loan: has personal loan? (categorical: 'no','yes','unknown')
+
+###### related with the last contact of the current campaign:
+
+8 - contact: contact communication type (categorical: 'cellular','telephone') 
+
+9 - month: last contact month of year (categorical: 'jan', 'feb', 'mar', ..., 'nov', 'dec')
+
+10 - day_of_week: last contact day of the week (categorical: 'mon','tue','wed','thu','fri')
+
+11 - duration: last contact duration, in seconds (numeric). Important note: this attribute highly affects the output target (e.g., if duration=0 then y='no'). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model.
+
+###### other attributes:
+
+12 - campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact) 
+
+13 - pdays: number of days that passed by after the client was last contacted from a previous campaign (numeric; 999 means client was not previously contacted)
+
+14 - previous: number of contacts performed before this campaign and for this client (numeric)
+
+
+15 - poutcome: outcome of the previous marketing campaign (categorical: 'failure','nonexistent','success')
+
+###### social and economic context attributes:
+
+16 - emp.var.rate: employment variation rate - quarterly indicator (numeric)
+
+17 - cons.price.idx: consumer price index - monthly indicator (numeric) 
+
+18 - cons.conf.idx: consumer confidence index - monthly indicator (numeric) 
+
+19 - euribor3m: euribor 3 month rate - daily indicator (numeric)
+
+20 - nr.employed: number of employees - quarterly indicator (numeric)
+
+##### Output variable:
+
+21 - y - has the client subscribed a term deposit? (binary: 'yes','no')
+
+### Loading the dataset 
+
+To make sure that the results are reproducible I set the random seed.
+Loaded the libraries that will help to run the codes throughout the analysis.
+
+```{r, message=FALSE, warning=FALSE}
+set.seed(1234)
+library(descr)
+library(data.table)
+library(ggplot2)
+library(randomForest)
+library(gbm)
+library(nnet)
+library(ROCR)
+library(knitr)
+library(pander)
+```
+
+The dataset is stored in a csv file, where the separators are semicolons. The dataframe where the dataset is loaded named as data.
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+getwd()
+setwd("~/Desktop/CEU/Data Science/bank")
+
+```
+```{r}
+data<-read.csv("bank-full.csv",sep=';')
+```
+
+### Descriptive Statistics
+This part will give some basic description and understanding of the variables in the dataset.
+
+#### Age distribution
+Age distribution of the data set is unimodal at 30 to 35. The distribution of age is skewed with longer right tail.
+
+```{r}
+hist(data$age, col = "light green", main = "Histogram of Age", xlab = "Age", freq = FALSE)
+```
+#### Month distribution
+```{r}
+barchart(data$month, col = "coral", main = "Barchart of Month", xlab = "Month", freq = FALSE)
+```
+The barchart of month distribution shows that most clients were last contacted in May.
+
+#### Distribution of outcome of the previous campaign  
+
+```{r}
+
+ggplot(data)+geom_bar(aes(x=poutcome,fill=poutcome))
+```
+
+The distribution shows that most of the observations do not have information about the outcome of the previous campaign. To understand what caused so many unknowns in the outcome of the previos campaign, I created a table to see the relationship between number of contacts performed before this campaign and for this client and outcome of the previous marketing campaign. The reason why there are so many unknown results is because bank has never contacted those clients before. So we may assume that they are new customers.      
+
+```{r}
+table(data$poutcome,data$previous>0)
+```
+
+
+#### Probability of the campaign success considering marital and job status 
+The data table was created to aid finding the probability for every job and marriage pair.
+The graph below shows tha single students and who divorced and retired are most likely to subscribe a term deposit provided by the bank.  
+```{r}
+data<-data.table(data)
+ggplot(data[,mean(as.numeric(y)-1),by=.(marital,job)],aes(x=marital,y=job))+geom_tile(aes(fill=V1))+scale_fill_distiller(palette="Spectral","Probability")
+```
+
+```{r}
+sum(data$previous>10)
+```
+There are only 294 observations in the data that were contacted by the bank more than 10 times.
+
+#### Probability of subscribing the term deposit based on number of contacts performed before this campaign and for this client
+The graph below demonstrates that the more bank contact the clients in the past, the more likely clients sign up for term deposit.
+```{r}
+ggplot(data[previous<=10,mean(as.numeric(y)-1),by=previous][order(previous)])+geom_line(aes(x=previous,y=V1))
+```
+
+
+## Machine Learning
+
+### Modeling
+Since the dataset was relatively clean, there was no need for me to create clean dataset. So there was no problem in running different models. The goal is to find the model that fits the data the best. I used three different models Random Forest ensemble learning (RF), Gradient Boosting Machine (GBM) and Neural Networks (NN) to predict and see how they perform. AUC will be used to measure predictive modeling accuracy.  
+
+##### Splitting the data
+The dataset was splitted into train and test sets, where 60% of the dataset will be assigned to be a train set and other 40% as test set. We have 27126 observations with 17 variables as train dataset, and 18085 observations with 17 variables as test dataset.
+```{r}
+N<-nrow(data)
+id<-sample(1:N,0.6*N)
+d_train<-data[id,]
+d_test<-data[-id,]
+```
+
+### Random Forest
+The values of Random Forest model are:  
+Number of trees (ntrees): 500.    
+Probability of clients to say 'yes' to subscribe the term deposit: predict(md, d_test, type = "prob")[,"yes"].    
+Threshold of the probability of clients clients saying 'yes': phat>0.5,1,0.  
+So if the probability is 0 or less than or equal to 0.5, the client will not sign up, if probability equals 1, then he will sign up for the term deposit offered by the bank.  
+
+```{r, message=FALSE, warning=FALSE}
+
+md <- randomForest(y ~ ., data = d_train, ntree = 500)
+
+plot(md)
+varImpPlot(md)
+
+phat <- predict(md, d_test, type = "prob")[,"yes"]
+```
+VarImp is used to demonstrate the variables that are important in predicting the outcome of banking marketing. Duration has the highest importance as well as month and balance has strong effect on predicting the outcome. 
+```{r, message=FALSE, warning=FALSE}
+pander(table(ifelse(phat>0.5,1,0), d_test$y))
+```
+
+From the confusion matrix above we can see that when we make a binary prediction, there can be 4 types of outcomes:  
+1. True Negative: Predicted that 15403 people will not sign up for the term deposit and they actually did not.    
+2. False Negative: Predicted that 1061 people will sign up for the term deposit and they actually did not.   
+3. False Positive: Predicted 615 people will not sign up for the term deposit but they ended signing up.     
+4. True Positive: Predicted 1006 people will sign up for the term deposit and they ended signing it up. 
+
+```{r, message=FALSE, warning=FALSE}
+rocr_obj <- prediction(phat, d_test$y)
+```
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+plot(performance(rocr_obj, "err"))  
+```
+
+The AUC is `r performance(rocr_obj, "auc")@y.values[[1]]`.
+
+```{r fig.cap="ROC Curve"}
+plot(performance(rocr_obj, "tpr", "fpr"), colorize=TRUE) 
+```
+
+### GBM
+Data: First we changed y variable in train and test sets to the numbers.   
+We use 1 to denote *yes* in the y variable and 0 to denote *no* in the y variable.   
+Distribution: Since the outcome of the marketing is binary 0 or 1, we use "bernoulli" distribution.  
+The total number of trees to fit (n.trees): 300.   
+The maximum depth of variable interactions (interaction.depth): 10.  
+A shrinkage parameter applied to each tree in the expansion (shrinkage): 0.05.  
+
+ 
+``` {r, message=FALSE, warning=FALSE}
+d_train_ynum<-d_train
+d_train_ynum$y <- ifelse(d_train_ynum$y=="yes",1,0)
+d_test_ynum<-d_test
+d_test_ynum$y <- ifelse(d_test_ynum$y=="yes",1,0)
+
+md <- gbm(y ~ ., data = d_train_ynum, distribution = "bernoulli",
+          n.trees = 300, interaction.depth = 10, shrinkage = 0.05)
+summary(md)
+yhat <- predict(md, d_test, n.trees = 300)
+``` 
+In the graph above demonstrates the variables that affect the prediction when running GBM prediction model. The variable that has the highest effect on predicting whether a client is going to subscribe the term deposit that bank is marketing is duration. 
+
+``` {r, message=FALSE, warning=FALSE}
+pander(table(ifelse(yhat>0,1,0), d_test$y))
+``` 
+
+The confusion matrix shows 4 types of outcomes when running GBM model:  
+1. True Negative: Predicted that 15472 people will not sign up for the term deposit and they actually did not.    
+2. False Negative: Predicted that 1048 people will sign up for the term deposit and they actually did not.   
+3. False Positive: Predicted 546 people will not sign up for the term deposit but they ended signing up.   
+4. True Positive: Predicted 1019 people will sign up for the term deposit and they ended signing it up.   
+``` {r, message=FALSE, warning=FALSE}
+rocr_obj <- prediction(yhat, d_test$y)
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+plot(performance(rocr_obj, "err"))  
+```
+
+The AUC is `r performance(rocr_obj, "auc")@y.values[[1]]`
+
+```{r fig.cap="ROC Curve"}
+plot(performance(rocr_obj, "tpr", "fpr"), colorize=TRUE)
+```
+
+### Neural Networks 
+NN model values:   
+The number of units in the hidden layer(size): 10.  
+Parameter for weight decay: 0.1.   
+Maximum number of iterations (maxit): 1000.   
+The maximum allowable number of weights (MaxNWts): 1000.
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+md <- nnet(y ~ ., data = d_train, 
+           size = 10, decay = 0.1,
+           maxit = 1000, MaxNWts = 1000)
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+nnhat <- predict(md, newdata = d_test)
+```
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+sum(ifelse(nnhat>0.5,1,0)!=d_test$y)/nrow(d_test)
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+pander(table(ifelse(nnhat>0.5,1,0), d_test$y))
+
+```
+
+The confusion matrix shows 4 types of outcomes when running NN:  
+1. True Negative: Predicted that 15325 people will not sign up for the term deposit and they actually did not.    
+2. False Negative: Predicted that 993 people will sign up for the term deposit and they actually did not.   
+3. False Positive: Predicted 693 people will not sign up for the term deposit but they ended signing up.   
+4. True Positive: Predicted 1074 people will sign up for the term deposit and they ended signing it up. 
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+rocr_obj <- prediction(nnhat, d_test$y)
+```
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+class(rocr_obj)
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+plot(performance(rocr_obj, "err"))          
+```
+
+The AUC is `r performance(rocr_obj, "auc")@y.values[[1]]`
+
+```{r fig.cap="ROC Curve"}
+plot(performance(rocr_obj, "tpr", "fpr"), colorize=TRUE)
+```
+
+# Conclusion 
+As AUC is measuring the performance of the prediction model, comparing AUC of RF, GBM and NN models, we can see that AUCs of these three models are almost the same, but GBM has the highest AUC of 0.937068. So if bank is doing marketing in the future, it can use GBM as predicting model because it has the highest accuracy. 
